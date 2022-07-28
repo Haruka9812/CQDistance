@@ -1,0 +1,189 @@
+#!/usr/bin/env python
+# -*- encoding: utf-8 -*-
+
+# import modules
+from ntpath import join
+import numpy as np
+import collections
+from optparse import OptionParser
+import os
+
+# def fuctions
+def Readpdb(path):
+    with open(path, 'r') as f:
+        lines = f.readlines()
+    AtomList = []
+    for i in lines:
+        #         print(i[13:16])
+        if i[:4] == 'ATOM':
+            AtomList.append(i.strip().split())
+        if i[:6] == 'CRYST1':
+            A = i.strip().split()[1]
+    Name = []
+    Coord = []
+    Flag = []
+    for i in AtomList:
+        if i[2] == "NA":
+            break
+        Name.append(i[2])
+        Coord.append(i[6:9])
+        Flag.append(i[4])
+    
+    Flag = np.array(Flag)
+    Name = np.array(Name)
+    Coord = np.array(Coord)
+    return Name, Coord, Flag, float(A)
+
+def splitList(flagLst,nameLst,coordLst,layernum):
+    index = [0]
+    for i,j in enumerate(flagLst):
+        if i < len(flagLst)-1 and flagLst[i] != flagLst[i+1]:
+            index.append(i+1)
+    tempbox = []
+    layerName = []
+    cqdName = []
+    layerCoord = []
+    cqdCoord = []
+    count = 0
+    for i in range(1,len(index)):
+        count += 1
+        box = nameLst[index[i-1]:index[i]]
+        layerName.append(box)
+        box = coordLst[index[i-1]:index[i]]
+        layerCoord.append(box)
+        if count == layernum:
+            cqdName.append(layerName)
+            cqdCoord.append(layerCoord)
+            layerName = []
+            layerCoord = []
+            count = 0
+        if i == len(index) - 1:
+            box = nameLst[index[i]:]
+            layerName.append(box)
+            box = coordLst[index[i]:]
+            layerCoord.append(box)
+            cqdName.append(layerName)
+            cqdCoord.append(layerCoord)
+            
+    return cqdName, cqdCoord
+
+def findCenter(layerloc,laysize):
+    a1 = 2 * laysize + 1
+    am = a1 + (laysize - 1) * 2
+    lme = (a1 + am) * laysize / 2
+    lmb = lme - am +1
+    lmb1 = lmb + am
+    lme1 = lme + am
+    mb = []
+    mb1 = int((lmb + lme)/2 - 1)
+    mb.append(mb1)
+    mb2 = int((lmb + lme)/2)
+    mb.append(mb2)
+    mb3 = int((lmb + lme)/2 + 1)
+    mb.append(mb3)
+    mb4 = int((lmb1 + lme1)/2 - 1)
+    mb.append(mb4)
+    mb5 = int((lmb1 + lme1)/2)
+    mb.append(mb5)
+    mb6 = int((lmb1 + lme1)/2 + 1)
+    mb.append(mb6)
+    locList = []
+    for i in mb:
+        locList.append(layerloc[i])
+    xsum = 0
+    ysum = 0
+    zsum = 0
+    for i in locList:
+        xsum += float(i[0])
+        ysum += float(i[1])
+        zsum += float(i[2])
+    center = [xsum/6,ysum/6,zsum/6]
+    return center
+
+def Distance(pos_1 , pos_2, A):
+    box_1 = np.array(pos_1.copy())
+    box_2 = np.array(pos_2.copy())
+    dd = box_1 - box_2
+    if np.abs(dd[0]) >  A / 2:
+            if dd[0] < -A / 2:
+                box_2[0] = box_2[0] - A
+            else:
+                box_2[0] = box_2[0] + A
+    if np.abs(dd[1]) > A / 2:
+            if dd[1] < -A / 2:
+                box_2[1] = box_2[1] - A
+            else:
+                box_2[1] = box_2[1] + A
+    if np.abs(dd[2]) > A / 2:
+            if dd[2] < -A / 2:
+                box_2[2] = box_2[2] - A
+            else:
+                box_2[2] = box_2[2] + A
+    dtc = np.linalg.norm(box_1 - box_2)
+    return dtc
+
+def command_line_arg():
+    usage = "usage: %prog [options] arg1 arg2"
+    par = OptionParser(usage=usage)
+    par.add_option('-i','--input',
+                    action= 'store', type = 'string', dest= 'pdbFilepath',
+                    default= './split_all/',
+                    help= 'directory of the splitted PDB files')
+    par.add_option('-o','--output',
+                    action= 'store', type = 'string', dest= 'saveDir',
+                    default= './dtc.dat',
+                    help= 'path to save the distances')
+    par.add_option('-d','--delta',
+                    action= 'store', type = 'int', dest= 'timeDelta',
+                    default= '20',
+                    help= 'time interval between two flames, in (ps)')  
+    par.add_option('--ls',
+                    action= 'store', type = 'int', dest= 'layerSize',
+                    default= '6',
+                    help= 'the size of max layer, in benzene')
+    par.add_option('--ln',
+                    action= 'store', type = 'int', dest= 'layerNum',
+                    default= '7',
+                    help= 'the number of graphene in one CQD')
+    par.add_option('--mol',
+                    action= 'store', type = 'int', dest= 'molNum',
+                    default= '3',
+                    help= 'the number of CQD in system')
+    return par.parse_args() 
+
+if __name__ == '__main__':
+    opts, args = command_line_arg()
+    inputpath = opts.pdbFilepath
+    infilename = os.listdir(inputpath)
+    layerNum = opts.layerNum
+    layerSize = opts.layerSize
+    molNum = opts.molNum
+    distanceList = []
+    count = 0
+    for i in infilename:
+        
+        Filepath = join(inputpath, i)
+        nameList, coordList, flagList, boxA = Readpdb(Filepath)
+        splName,splCoord = splitList(flagList,nameList,coordList,layerNum)
+        center = []
+        for i in range(0,molNum):
+            centertemp = findCenter(splCoord[i][0],layerSize)
+            center.append(centertemp)
+        distance = [count]
+        for i in range(0,molNum):
+            for j in range(0,molNum):
+                if j > i :
+                    dtc = Distance(center[i], center[j], boxA)
+                    distance.append(dtc)
+        distanceList.append(distance)
+        count += opts.timeDelta
+        prosprct = (count/opts.timeDelta)/len(infilename)
+        print('Prossing...' + f'{prosprct:.2%}')
+    saveName = opts.saveDir
+    with open(saveName, 'w') as file:
+        for i in distanceList:
+            for j in i:
+                file.write(str(j))
+                file.write('\t')
+            file.write('\n')
+    
